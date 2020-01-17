@@ -1,0 +1,143 @@
+# import pymysql
+import pandas as pd
+import numpy as np
+import csv
+from datetime import datetime
+import time
+import json
+import pprint
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.utils.np_utils import to_categorical
+from keras.layers import Input
+import os
+os.environ['KERAS_BACKEND']='tensorflow'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+from keras.layers.recurrent import LSTM
+from keras.layers import Activation, Dense, Dropout
+
+df = pd.read_csv("trakop 1.csv")
+print("="*50)
+print("First Five Rows ","\n")
+print(df.head(2),"\n")
+
+dataset = df
+dataset["Month"] = pd.to_datetime(df["timestamp"]).dt.month
+dataset["Year"] = pd.to_datetime(df["timestamp"]).dt.year
+dataset["Date"] = pd.to_datetime(df["timestamp"]).dt.date
+dataset["Time"] = pd.to_datetime(df["timestamp"]).dt.time
+dataset["Week"] = pd.to_datetime(df["timestamp"]).dt.week
+dataset["Day"] = pd.to_datetime(df["timestamp"]).dt.day_name()
+dataset["Hour"] = pd.to_datetime(df["timestamp"]).dt.hour
+dataset = df.set_index("timestamp")
+dataset.index = pd.to_datetime(dataset.index)
+dataset.head(1)
+
+print(df.Year.unique(),"\n")
+print("Total Number of Unique Year", df.Year.nunique(), "\n")
+
+
+NewDataSet = dataset.resample('D').mean()
+# print(NewDataSet)
+
+print("Old Dataset ",dataset.shape )
+print("New  Dataset ",NewDataSet.shape )
+
+TestData = NewDataSet.tail(50)
+Training_Set = NewDataSet.iloc[:,0:1]
+Training_Set = Training_Set[:-10]
+print("Training Set Shape ", Training_Set.shape)
+print("Test Set Shape ", TestData.shape)
+
+Training_Set = Training_Set.values
+sc = MinMaxScaler(feature_range=(0, 1))
+Train = sc.fit_transform(Training_Set)
+
+X_Train = []
+Y_Train = []
+
+# Range should be fromm 60 Values to END
+for i in range(10, Train.shape[0]):
+
+    # X_Train 0-9
+    X_Train.append(Train[i-10:i])
+
+    # Y Would be 10 th Value based on past 10 Values
+    Y_Train.append(Train[i])
+
+# Convert into Numpy Array
+X_Train = np.array(X_Train)
+Y_Train = np.array(Y_Train)
+
+print(X_Train.shape)
+print(Y_Train.shape)
+
+X_Train = np.reshape(X_Train, newshape=(X_Train.shape[0], X_Train.shape[1], 1))
+X_Train.shape
+
+regressor = Sequential()
+
+# Adding the first LSTM layer and some Dropout regularisation
+regressor.add(LSTM(units = 1, return_sequences = True, input_shape = (X_Train.shape[1], 1)))
+regressor.add(Dropout(0.4))
+
+# Adding a second LSTM layer and some Dropout regularisation
+regressor.add(LSTM(units=1, return_sequences = True))
+regressor.add(Dropout(0.4))
+
+# Adding a third LSTM layer and some Dropout regularisation
+regressor.add(LSTM(units=1, return_sequences = True))
+regressor.add(Dropout(0.4))
+
+# Adding a fourth LSTM layer and some Dropout regularisation
+regressor.add(LSTM(units = 1))
+regressor.add(Dropout(0.4))
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'rmsprop', loss = 'mean_squared_error', metrics=['acc'])
+regressor.fit(X_Train, Y_Train, epochs = 30, batch_size = 12)
+
+Df_Total = pd.concat((NewDataSet[["amount"]], TestData[["amount"]]), axis=0)
+Df_Total.shape
+
+inputs = Df_Total[len(Df_Total) - len(TestData) - 10:].values
+
+# We need to Reshape
+inputs = inputs.reshape(-1,1)
+
+# Normalize the Dataset
+inputs = sc.transform(inputs)
+
+X_test = []
+for i in range(10, inputs.shape[0]):
+    X_test.append(inputs[i-10:i])
+
+# Convert into Numpy Array
+X_test = np.array(X_test)
+
+# Reshape before Passing to Network
+X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+
+# Pass to Model
+predicted_raise = regressor.predict(X_test)
+
+# Do inverse Transformation to get Values
+predicted_raise = sc.inverse_transform(predicted_raise)
+
+Predicted_Amount  = predicted_raise
+dates = TestData.index.to_list()
+
+True_Amount = TestData["amount"].to_list()
+Predicted_Amount  = predicted_raise
+dates = TestData.index.to_list()
+growth_rate= (True_Amount-Predicted_Amount)/True_Amount*100
+Machine_Df = pd.DataFrame(data={
+    "Date":dates,
+    "TrueAmount": True_Amount,
+    "PredictedAmount":[x[0] for x in Predicted_Amount ],
+    "Growthrate": [x[0] for x in growth_rate]
+})
+print(Machine_Df)
